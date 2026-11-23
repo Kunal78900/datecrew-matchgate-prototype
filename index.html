@@ -47,36 +47,36 @@
 
   <h2>1. Client preference record</h2>
   <div class="card">
-    <label>Client</label>
+    <label for="client">Client</label>
     <select id="client"></select>
     <div class="prefs" id="clientPrefs" style="margin-top:10px"></div>
   </div>
 
   <h2>2. Pre-send profile check</h2>
   <div class="card">
-    <label>Candidate profile</label>
+    <label for="candidate">Candidate profile</label>
     <select id="candidate"></select>
     <div id="custom" class="hidden">
       <div class="grid">
-        <div><label>Age</label><input id="c_age" type="number" value="29"></div>
-        <div><label>City</label><input id="c_city" value="Delhi"></div>
-        <div><label>Diet</label><select id="c_diet"><option>Vegetarian</option><option>Non-vegetarian</option><option>Eggetarian</option></select></div>
-        <div><label>Smokes</label><select id="c_smoke"><option>No</option><option>Yes</option></select></div>
-        <div><label>Wants children</label><select id="c_kids"><option>Yes</option><option>No</option><option>Unsure</option></select></div>
-        <div><label>Education</label><select id="c_edu"><option>Postgraduate</option><option>Graduate</option><option>Diploma</option></select></div>
-        <div><label>Plans to move abroad</label><select id="c_abroad"><option>Unsure</option><option>No</option><option>Yes</option></select></div>
+        <div><label for="c_age">Age</label><input id="c_age" type="number" min="18" max="100" step="1" value="29"></div>
+        <div><label for="c_city">City</label><input id="c_city" value="Delhi"></div>
+        <div><label for="c_diet">Diet</label><select id="c_diet"><option>Vegetarian</option><option>Non-vegetarian</option><option>Eggetarian</option></select></div>
+        <div><label for="c_smoke">Smokes</label><select id="c_smoke"><option>No</option><option>Yes</option></select></div>
+        <div><label for="c_kids">Wants children</label><select id="c_kids"><option>Yes</option><option>No</option><option>Unsure</option></select></div>
+        <div><label for="c_edu">Education</label><select id="c_edu"><option>Postgraduate</option><option>Graduate</option><option>Diploma</option></select></div>
+        <div><label for="c_abroad">Plans to move abroad</label><select id="c_abroad"><option>Unsure</option><option>No</option><option>Yes</option></select></div>
       </div>
     </div>
     <button id="run">Run check</button>
-    <div id="result" style="margin-top:14px"></div>
+    <div id="result" style="margin-top:14px" aria-live="polite"></div>
   </div>
 
   <h2>3. Rejection feedback structurer</h2>
   <div class="card">
-    <label>Paste the client's free-text rejection feedback</label>
+    <label for="fb">Paste the client's free-text rejection feedback</label>
     <textarea id="fb" placeholder="e.g. He seemed nice but he smokes occasionally and lives too far, and honestly I want someone taller who plans to settle abroad."></textarea>
     <button id="parse">Structure feedback</button>
-    <div id="parsed"></div>
+    <div id="parsed" aria-live="polite"></div>
     <div id="update"></div>
   </div>
 
@@ -126,6 +126,38 @@ $('client').onchange = () => { showClient(); $('parsed').innerHTML=''; $('update
 $('candidate').onchange = () => $('custom').classList.toggle('hidden', !candidates[$('candidate').value].custom);
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Canonical city matching: exact after normalization, never substring ("NotBengaluru" must not pass).
+const cityNames = [
+  ['bengaluru', ['bengaluru','bangalore','blr']],
+  ['mumbai', ['mumbai','bombay']],
+  ['pune', ['pune']],
+  ['delhi', ['delhi','new delhi']],
+  ['noida', ['noida','greater noida']],
+  ['gurgaon', ['gurgaon','gurugram']],
+  ['chennai', ['chennai','madras']],
+  ['hyderabad', ['hyderabad','secunderabad']],
+  ['kolkata', ['kolkata','calcutta']],
+  ['ahmedabad', ['ahmedabad']],
+  ['jaipur', ['jaipur']],
+  ['lucknow', ['lucknow']],
+  ['chandigarh', ['chandigarh']],
+  ['indore', ['indore']],
+  ['kochi', ['kochi','cochin']]
+];
+function cityCanon(s){
+  const t = String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t) return { kind:'empty' };
+  for (const [canon, names] of cityNames) if (names.includes(t)) return { kind:'known', city:canon };
+  return { kind:'unknown', raw:t };
+}
+// Evaluate a city requirement/preference: null on pass; {fail:true} for a known different
+// city; {fail:false} for empty/unrecognized (confirm-before-send, never a false CLEAR).
+function checkCity(cd, label, allowed){
+  const c = cityCanon(cd.city);
+  if (c.kind === 'known') return allowed.includes(c.city) ? null : { fail:true };
+  const why = c.kind === 'empty' ? 'candidate city is not captured' : 'candidate city "' + esc(cd.city) + '" is not recognized';
+  return { fail:false, msg: label + '; ' + why + ' and must be confirmed before sending.' };
+}
 const eduRank = { 'Diploma':1, 'Graduate':2, 'Postgraduate':3 };
 function eduRequired(pref){ if (/postgraduate/i.test(pref)) return 3; if (/graduate/i.test(pref)) return 2; return 0; }
 function check(){
@@ -140,16 +172,20 @@ function check(){
     if (/no smokers/i.test(d) && cd.smoke === 'Yes') hard.push('Client stated no smokers; candidate smokes.');
     if (/vegetarian only/i.test(d) && cd.diet !== 'Vegetarian') hard.push('Client stated vegetarian only; candidate is ' + esc(cd.diet.toLowerCase()) + '.');
     if (/must want children/i.test(d) && cd.kids !== 'Yes') hard.push('Client wants someone who wants children; candidate answer: ' + esc(cd.kids.toLowerCase()) + '.');
-    if (/based in (\w+)/i.test(d)) { const m = d.match(/based in (\w+)/i); if (!cd.city.toLowerCase().includes(m[1].toLowerCase())) hard.push('Client requires ' + m[1] + '; candidate is in ' + esc(cd.city) + '.'); }
+    if (/based in (\w+)/i.test(d)) { const m = d.match(/based in (\w+)/i); const r = checkCity(cd, 'Client requires ' + m[1], [m[1].toLowerCase()]); if (r) { if (r.fail) hard.push('Client requires ' + m[1] + '; candidate is in ' + esc(cd.city) + '.'); else soft.push({ text:r.msg, unknown:true }); } }
     if (/no plans to settle abroad/i.test(d)) {
       if (cd.abroad === true || cd.abroad === 'Yes') hard.push('Client ruled out settling abroad; candidate plans to move abroad.');
       else if (cd.abroad === 'Unsure' || cd.abroad === undefined || cd.abroad === null) soft.push({ text:'Client ruled out settling abroad; candidate plans are not captured.', unknown:true });
     }
   });
-  if (cd.age < lo || cd.age > hi) soft.push({ text:'Age ' + cd.age + ' is outside the stated ' + esc(cl.prefs.age) + ' range.' });
-  if (/mumbai or pune/i.test(cl.prefs.city) && !/mumbai|pune/i.test(cd.city)) soft.push({ text:'City ' + esc(cd.city) + ' is outside the stated Mumbai or Pune preference.' });
-  if (/delhi ncr/i.test(cl.prefs.city) && !/delhi|noida|gurgaon|gurugram/i.test(cd.city)) soft.push({ text:'City ' + esc(cd.city) + ' is outside the stated Delhi NCR preference.' });
-  if (/^bengaluru$/i.test(cl.prefs.city) && !/bengaluru/i.test(cd.city)) soft.push({ text:'City ' + esc(cd.city) + ' is outside the stated Bengaluru preference.' });
+  if (custom && (!Number.isInteger(cd.age) || cd.age < 18 || cd.age > 100)) soft.push({ text:'Candidate age is not captured or not valid; confirm before sending.', unknown:true });
+  else if (cd.age < lo || cd.age > hi) soft.push({ text:'Age ' + cd.age + ' is outside the stated ' + esc(cl.prefs.age) + ' range.' });
+  const cpref = cl.prefs.city.toLowerCase();
+  let cityAllowed = null;
+  if (/mumbai or pune/.test(cpref)) cityAllowed = ['mumbai','pune'];
+  else if (/delhi ncr/.test(cpref)) cityAllowed = ['delhi','noida','gurgaon'];
+  else if (/^bengaluru$/.test(cpref)) cityAllowed = ['bengaluru'];
+  if (cityAllowed) { const r = checkCity(cd, 'Stated city preference is ' + esc(cl.prefs.city), cityAllowed); if (r) { if (r.fail) soft.push({ text:'City ' + esc(cd.city) + ' is outside the stated ' + esc(cl.prefs.city) + ' preference.' }); else soft.push({ text:r.msg, unknown:true }); } }
   if (cl.prefs.diet !== 'Any' && cd.diet !== cl.prefs.diet) soft.push({ text:'Diet mismatch: client prefers ' + esc(cl.prefs.diet.toLowerCase()) + ', candidate is ' + esc(cd.diet.toLowerCase()) + '.' });
   const req = eduRequired(cl.prefs.education);
   if (req && (eduRank[cd.edu] || 0) < req) soft.push({ text:'Education preference is ' + esc(cl.prefs.education.toLowerCase()) + '; candidate: ' + esc(cd.edu.toLowerCase()) + '.' });
@@ -159,10 +195,10 @@ function check(){
   else if (soft.length) {
     v = 'REVIEW, mismatches to discuss'; cls = 'v-review';
     extra = hasUnknown
-      ? '<div class="note">Missing information must be confirmed with the candidate or client before sending; it cannot be overridden. Stated-preference mismatches can be overridden with a note; deal-breakers cannot.</div>'
-      : '<div class="note">Soft mismatches can be overridden with a note. Preferences are sometimes wrong or flexible; deal-breakers are not.</div>';
+      ? '<div class="note">Missing information must be confirmed with the candidate or client before sending; it cannot be overridden. Stated-preference mismatches could be overridden with a note in production; deal-breakers cannot. Demo limits: checks are advisory and overrides are not persisted.</div>'
+      : '<div class="note">Soft mismatches are advisory here: production would allow an override with a note; this demo does not persist overrides. Preferences are sometimes wrong or flexible; deal-breakers are not.</div>';
   }
-  else { v = 'CLEAR, safe to send'; cls = 'v-clear'; }
+  else { v = 'CLEAR, no recorded conflicts'; cls = 'v-clear'; extra = '<div class="note">No conflicts against this client\'s recorded preferences and deal-breakers; this is not a guarantee of fit. Demo limits: mocked data, no email is actually sent, checks are advisory (nothing enforces the verdict), and overrides are not persisted.</div>'; }
   const li = hard.concat(soft.map(s => s.text)).map(r => '<li>' + r + '</li>').join('');
   $('result').innerHTML = '<div class="verdict ' + cls + '">' + v + '</div>' + (li ? '<ul class="reasons">' + li + '</ul>' : '') + extra;
 }
